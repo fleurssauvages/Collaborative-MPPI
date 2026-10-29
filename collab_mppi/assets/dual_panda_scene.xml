@@ -1,0 +1,31 @@
+<mujoco model="dual_panda">
+  <!-- Shared scene. The two Panda arms are attached in Python (collab_mppi/robot.py)
+       from franka_emika_panda/panda.xml, with name prefixes left_ and right_. -->
+  <option timestep="0.005" integrator="implicit"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <global azimuth="90" elevation="-25" offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.38 0.52" rgb2="0.03 0.04 0.06"
+             width="512" height="3072"/>
+    <texture type="2d" name="ground" builtin="checker" mark="edge"
+             rgb1="0.18 0.20 0.22" rgb2="0.10 0.11 0.12" markrgb="0.7 0.7 0.7"
+             width="300" height="300"/>
+    <material name="ground" texture="ground" texuniform="true" texrepeat="5 5"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 -0.6 2.0" dir="0 0.3 -1" directional="true"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="ground"/>
+    <!-- Visual-only mocap markers for the active Cartesian target of each arm. -->
+    <body name="left_target" mocap="true" pos="-0.25 0 0.5">
+      <geom type="sphere" size="0.02" rgba="0.15 0.55 1.0 0.8" contype="0" conaffinity="0"/>
+    </body>
+    <body name="right_target" mocap="true" pos="0.25 0 0.5">
+      <geom type="sphere" size="0.02" rgba="1.0 0.45 0.15 0.8" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+</mujoco>

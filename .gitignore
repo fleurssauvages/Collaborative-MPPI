@@ -1,0 +1,15 @@
+# Run outputs (recordings, videos)
+/results/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+mujoco_env/
+.venv/
+
+# Build artifacts
+build/
+*.egg-info/
