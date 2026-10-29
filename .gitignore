@@ -1,5 +1,6 @@
 # Run outputs (recordings, videos)
 /results/
+/assets/*.mp4
 
 # Python cache files
 __pycache__/
