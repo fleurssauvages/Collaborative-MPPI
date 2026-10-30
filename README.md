@@ -29,7 +29,7 @@ The two arms face each other and are controlled either by one **centralized** MP
 
 <br>
 
-<h3 align="center">Ball Pass</h3>
+<h3 align="center">Air Hockey</h3>
 
 <table align="center" width="100%">
   <tr>
@@ -38,14 +38,14 @@ The two arms face each other and are controlled either by one **centralized** MP
   </tr>
   <tr>
     <td align="center">
-      <img src="assets/spike_ball_pass_centralized.gif"
+      <img src="assets/spike_air_hockey_centralized.gif"
            width="100%"
-           alt="Centralized Spike-MPPI ball pass">
+           alt="Centralized Spike-MPPI air hockey">
     </td>
     <td align="center">
-      <img src="assets/spike_ball_pass_decentralized.gif"
+      <img src="assets/spike_air_hockey_decentralized.gif"
            width="100%"
-           alt="Decentralized Spike-MPPI ball pass">
+           alt="Decentralized Spike-MPPI air hockey">
     </td>
   </tr>
 </table>
@@ -65,7 +65,7 @@ python -m pip install -r requirements.txt
 
 ```bash
 python -m collab_mppi.reaching.run --sampler spike --layout centralized --viewer
-python -m collab_mppi.ball_pass.run --sampler spike --layout decentralized --viewer
+python -m collab_mppi.air_hockey.run --sampler spike --layout decentralized --viewer
 ```
 
 Use `--sampler standard`, `pink` or `poisson` for comparison, and `--help` for all options.

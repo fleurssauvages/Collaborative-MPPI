@@ -1,7 +1,7 @@
-<mujoco model="dual_panda_table_pass">
-  <!-- Table ball pass. The two Panda arms are attached in Python (collab_mppi/robot.py)
+<mujoco model="dual_panda_air_hockey">
+  <!-- Air hockey table. The two Panda arms are attached in Python (collab_mppi/robot.py)
        at x = -0.75 (left) and x = +0.75 (right). The table runs along x between them,
-       with side rails and open ends; a ball rolling off an end counts as a drop. -->
+       with side rails and open ends; a puck rolling off an end counts as a drop. -->
   <option timestep="0.005" integrator="implicit"/>
 
   <visual>
@@ -25,23 +25,28 @@
     <geom name="floor" type="plane" size="2 2 0.05" material="ground"/>
 
     <!-- Table top at z = 0.20 spanning x in [-0.5, 0.5], y in [-0.25, 0.25]. -->
-    <geom name="table" type="box" pos="0 0 0.1" size="0.5 0.25 0.1" material="table"/>
-    <geom name="rail_left" type="box" pos="0 0.26 0.215" size="0.5 0.01 0.015" material="rail"/>
-    <geom name="rail_right" type="box" pos="0 -0.26 0.215" size="0.5 0.01 0.015" material="rail"/>
+    <!-- condim 1: a frictionless air hockey surface for the puck and the stick tip discs. -->
+    <geom name="table" type="box" pos="0 0 0.1" size="0.5 0.25 0.1" material="table" condim="1"/>
+    <!-- Bouncy rails (direct solref: low damping), so the puck rebounds instead of hugging them. -->
+    <geom name="rail_left" type="box" pos="0 0.26 0.215" size="0.5 0.01 0.015" material="rail"
+          condim="1" solref="-5000 -10"/>
+    <geom name="rail_right" type="box" pos="0 -0.26 0.215" size="0.5 0.01 0.015" material="rail"
+          condim="1" solref="-5000 -10"/>
     <!-- Midline: visual only. -->
     <geom type="box" pos="0 0 0.2005" size="0.004 0.25 0.0005" rgba="0.9 0.9 0.9 0.6"
           contype="0" conaffinity="0"/>
     <!-- Middle no-go zone for the robots (x in [-0.1, 0.1]), marked as a strip on the table:
          the MPPI cost penalizes entering it. Its half-width is read from here by
-         collab_mppi/ball_pass/task.py. -->
+         collab_mppi/air_hockey/task.py. -->
     <geom name="middle_zone" type="box" pos="0 0 0.2006" size="0.1 0.25 0.0005" rgba="0.9 0.25 0.2 0.35"
           contype="0" conaffinity="0"/>
 
-    <!-- Rolling resistance (condim 6) lets an unhit ball come to rest. -->
-    <body name="ball" pos="-0.25 0 0.235">
-      <freejoint name="ball"/>
-      <geom name="ball" type="sphere" size="0.035" mass="0.1" condim="6"
-            friction="0.8 0.005 0.0003" rgba="0.95 0.85 0.15 1"/>
+    <!-- Air hockey puck, frictionless (condim 1) against the
+         table, the rails and the stick tip discs. -->
+    <body name="puck" pos="-0.25 0 0.212">
+      <freejoint name="puck"/>
+      <geom name="puck" type="cylinder" size="0.035 0.012" mass="0.1" condim="1"
+            rgba="0.95 0.85 0.15 1"/>
     </body>
 
     <!-- Target markers expected by collab_mppi/robot.py; hidden in this task. -->
@@ -54,10 +59,10 @@
   </worldbody>
 
   <sensor>
-    <framepos name="ball_pos" objtype="xbody" objname="ball"/>
-    <framelinvel name="ball_vel" objtype="xbody" objname="ball"/>
-    <!-- Net contact force between each arm (whole subtree) and the ball. -->
-    <contact name="left_push" geom1="ball" subtree2="left_link0" num="1" data="force" reduce="netforce"/>
-    <contact name="right_push" geom1="ball" subtree2="right_link0" num="1" data="force" reduce="netforce"/>
+    <framepos name="puck_pos" objtype="xbody" objname="puck"/>
+    <framelinvel name="puck_vel" objtype="xbody" objname="puck"/>
+    <!-- Net contact force between each arm (whole subtree) and the puck. -->
+    <contact name="left_push" geom1="puck" subtree2="left_link0" num="1" data="force" reduce="netforce"/>
+    <contact name="right_push" geom1="puck" subtree2="right_link0" num="1" data="force" reduce="netforce"/>
   </sensor>
 </mujoco>

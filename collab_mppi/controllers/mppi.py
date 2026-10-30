@@ -2,7 +2,14 @@
 
 Each controlled arm receives three proposal channels, interpreted as Cartesian
 fingertip offsets (metres) and mapped to joint-position offsets with the
-Jacobian pseudo-inverse along the nominal plan, as in Franka_MPPI. Rollouts,
+Jacobian pseudo-inverse along the nominal plan, as in Franka_MPPI. With
+upright_gain > 0 the mapping also holds the tool pointing straight down: the
+Jacobian gains the two tilt rows, whose target turns the tool z axis back to
+vertical by that fraction per update, and the samples cannot tilt it. With
+tip_z set, the tip height is held there the same way (air hockey): the samples
+only explore x and y, and each update removes tip_z_gain of the height error. With
+posture_gain > 0 the joints are also pulled towards HOME_Q in the Jacobian
+null space, so the redundancy cannot drift into folded configurations. Rollouts,
 costs and the weighted update stay in actuator (joint-target) space. Rollouts
 run in parallel with mujoco.rollout.
 
@@ -20,7 +27,7 @@ import mujoco
 import mujoco.rollout
 import numpy as np
 
-from ..robot import ARMS, DualFranka
+from ..robot import ARMS, HOME_Q, DualFranka
 from ..samplers import make_sampler
 from .lbps import optimize_lbps_temperature, weighted_control_sequence
 
@@ -33,6 +40,11 @@ class MPPIConfig:
     control_dt: float = 0.01
     noise_std: float = 0.01        # Cartesian exploration, metres
     ik_rcond: float = 1e-4
+    ik_damping: float = 0.0        # damped least squares instead of the pseudo-inverse when > 0
+    upright_gain: float = 0.0      # per-update fraction of tool tilt removed (0: orientation free)
+    tip_z: float | None = None     # fixed tip height, metres (None: free)
+    tip_z_gain: float = 0.5        # per-update fraction of the tip height error removed
+    posture_gain: float = 0.0      # per-update fraction of the null-space distance to HOME_Q removed
     lbps_delta: float = 0.95
     lambda_temperature: float = 1.0  # fallback when LBPS cannot adapt
     w_clearance: float = 1e3
@@ -69,17 +81,40 @@ class MPPIController:
         cfg, robot = self.cfg, self.robot
         xyz = cfg.noise_std * self.sampler(self.rng)
         cand = np.broadcast_to(nominal, (cfg.rollouts, *nominal.shape)).copy()
-        jac = {arm: np.empty((cfg.horizon, 3, 7)) for arm in self.arms}
+        upright = cfg.upright_gain > 0
+        rows = 5 if upright else 3
+        jac = {arm: np.empty((cfg.horizon, rows, 7)) for arm in self.arms}
+        tilt = {arm: np.zeros((cfg.horizon, 2)) for arm in self.arms}
+        lift = {arm: np.zeros(cfg.horizon) for arm in self.arms}
+        down = np.array([0.0, 0.0, -1.0])
         for t in range(cfg.horizon):
             for arm in self.arms:
                 self.scratch.qpos[robot.joint_qadr[arm]] = nominal[t, robot.arm_act[arm]]
             mujoco.mj_kinematics(robot.model, self.scratch)
             mujoco.mj_comPos(robot.model, self.scratch)
             for arm in self.arms:
-                jac[arm][t] = robot.jacobian(arm, self.scratch)
+                if upright:
+                    jac[arm][t], z = robot.jacobian_upright(arm, self.scratch)
+                    tilt[arm][t] = cfg.upright_gain * np.cross(z, down)[:2]
+                if cfg.tip_z is not None:
+                    lift[arm][t] = cfg.tip_z_gain * (cfg.tip_z - robot.ee(arm, self.scratch)[2])
+                else:
+                    jac[arm][t] = robot.jacobian(arm, self.scratch)
         for k, arm in enumerate(self.arms):
-            jinv = np.linalg.pinv(jac[arm], rcond=cfg.ik_rcond)  # (H, 7, 3)
-            cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,ntc->ntj', jinv, xyz[:, :, 3 * k:3 * k + 3])
+            if cfg.ik_damping > 0:  # bounded joint offsets near singular poses
+                jt = jac[arm].transpose(0, 2, 1)
+                jinv = jt @ np.linalg.inv(jac[arm] @ jt + cfg.ik_damping ** 2 * np.eye(rows))  # (H, 7, rows)
+            else:
+                jinv = np.linalg.pinv(jac[arm], rcond=cfg.ik_rcond)
+            if cfg.tip_z is not None:
+                xyz[:, :, 3 * k + 2] = lift[arm]
+            cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,ntc->ntj', jinv[:, :, :3], xyz[:, :, 3 * k:3 * k + 3])
+            if upright:
+                cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,tc->tj', jinv[:, :, 3:], tilt[arm])
+            if cfg.posture_gain > 0:
+                null = np.eye(7) - jinv @ jac[arm]
+                pull = cfg.posture_gain * (HOME_Q - nominal[:, robot.arm_act[arm]])
+                cand[:, :, robot.arm_act[arm]] += np.einsum('tij,tj->ti', null, pull)
         return np.clip(cand, robot.ctrl_low, robot.ctrl_high)
 
     def _costs(self, sensors: np.ndarray, goal) -> np.ndarray:

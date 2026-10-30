@@ -3,8 +3,8 @@
 The left arm stands at x = -base_distance/2 and faces +x; the right arm stands
 at x = +base_distance/2 and faces -x, so their workspaces overlap around x = 0.
 Every arm joint has the Menagerie position actuator. The hand is replaced by a
-stick (franka_emika_panda/panda_stick.xml, as in Franka_MPPI) whose tip centre is
-the end-effector. A scene XML (reaching or table ball pass) supplies everything else.
+stick with a flat disc tip (franka_emika_panda/panda_stick.xml, as in Franka_MPPI) whose tip centre is
+the end-effector. A scene XML (reaching or air hockey) supplies everything else.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ SCENE_XML = ASSETS / 'dual_panda_scene.xml'
 ARMS = ('left', 'right')
 HOME_Q = np.array([0.0, -0.3, 0.0, -2.2, 0.0, 1.9, 0.785])
 EE_OFFSET = 0.086   # stick body origin to the tip centre, metres
-STICK_R = 0.006     # stick and tip radius, metres
+TIP_R, TIP_HALF_H = 0.02, 0.01  # flat disc at the stick tip, metres
 # Bodies whose origins approximate each arm for arm-arm clearance.
 PROXY_BODIES = ('link3', 'link4', 'link5', 'link6', 'link7', 'stick')
 
@@ -38,6 +38,10 @@ def build_model(base_distance: float = 1.5, scene_xml: Path = SCENE_XML) -> mujo
         for body in PROXY_BODIES:
             spec.add_sensor(name=f'{arm}_{body}_pos', type=mujoco.mjtSensor.mjSENS_FRAMEPOS,
                             objtype=mujoco.mjtObj.mjOBJ_XBODY, objname=f'{arm}_{body}')
+    # Tip linear velocity, after the contiguous per-arm position blocks.
+    for arm in ARMS:
+        spec.add_sensor(name=f'{arm}_ee_vel', type=mujoco.mjtSensor.mjSENS_FRAMELINVEL,
+                        objtype=mujoco.mjtObj.mjOBJ_SITE, objname=f'{arm}_ee')
     return spec.compile()
 
 
@@ -58,6 +62,7 @@ class DualFranka:
         self.ctrl_high = m.actuator_ctrlrange[:, 1].copy()
         # Each arm's sensors are contiguous: tip first, then the clearance proxies.
         self.sensor_ee = {arm: self.sensor_slice(f'{arm}_ee_pos') for arm in ARMS}
+        self.sensor_ee_vel = {arm: self.sensor_slice(f'{arm}_ee_vel') for arm in ARMS}
         self.sensor_arm = {arm: slice(self.sensor_ee[arm].start,
                                       self.sensor_slice(f'{arm}_{PROXY_BODIES[-1]}_pos').stop) for arm in ARMS}
         self.reset()
@@ -93,6 +98,15 @@ class DualFranka:
         jacp = np.zeros((3, self.model.nv))
         mujoco.mj_jacSite(self.model, d, jacp, None, self.ee_site[arm])
         return jacp[:, self.joint_dadr[arm]]
+
+    def jacobian_upright(self, arm, data=None):
+        """Tip translational Jacobian stacked with the x and y rows of the rotational
+        one (5 x 7), and the tool z axis: rotation about the vertical stays free."""
+        d = self.data if data is None else data
+        jacp, jacr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
+        mujoco.mj_jacSite(self.model, d, jacp, jacr, self.ee_site[arm])
+        dofs = self.joint_dadr[arm]
+        return np.vstack([jacp[:, dofs], jacr[:2, dofs]]), d.site_xmat[self.ee_site[arm]].reshape(3, 3)[:, 2].copy()
 
     def set_target_marker(self, arm, xyz):
         self.data.mocap_pos[self.target_mocap[arm]] = xyz

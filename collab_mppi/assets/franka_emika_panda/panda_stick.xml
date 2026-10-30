@@ -1,5 +1,5 @@
 <!-- Generated from panda.xml (MuJoCo Menagerie, Apache-2.0): the hand and fingers are replaced
-     by a small bridge and one stick with a sphere tip, as in Franka_MPPI's slim tool. Tip centre
+     by a small bridge and one stick, as in Franka_MPPI's slim tool, ending in a flat frictionless disc (a mallet face, which glides on a table). Tip centre
      0.086 m along the stick body's +z. -->
 <mujoco model="panda_stick">
   <compiler angle="radian" meshdir="assets" autolimits="true" />
@@ -197,7 +197,7 @@
                       <inertial mass="0.18" pos="0 0 0.075" diaginertia="0.00045 0.00045 0.00012" />
                       <geom name="stick_bridge" type="box" pos="0 0 0.014" size="0.012 0.030 0.014" rgba="0.82 0.84 0.86 1" friction="1.2 0.01 0.001" />
                       <geom name="stick_rod" type="capsule" fromto="0 0 0.020 0 0 0.080" size="0.006" rgba="0.90 0.91 0.92 1" friction="1.2 0.01 0.001" />
-                      <geom name="stick_tip" type="sphere" pos="0 0 0.086" size="0.006" rgba="0.20 0.20 0.22 1" friction="1.4 0.01 0.001" />
+                      <geom name="stick_tip" type="cylinder" pos="0 0 0.086" size="0.02 0.01" rgba="0.20 0.20 0.22 1" condim="1" priority="1" />
                     </body>
                   </body>
                 </body>
