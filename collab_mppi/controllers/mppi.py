@@ -1,4 +1,4 @@
-"""MPPI over one or both Panda arms with Cartesian proposals.
+"""MPPI over one or both arms with Cartesian proposals.
 
 Each controlled arm receives three proposal channels, interpreted as Cartesian
 fingertip offsets (metres) and mapped to joint-position offsets with the
@@ -8,9 +8,11 @@ Jacobian gains the two tilt rows, whose target turns the tool z axis back to
 vertical by that fraction per update, and the samples cannot tilt it. With
 orient_target set ({arm: 3 x 3 rotation}) the whole tool orientation is held
 the same way, yaw included (grasping): all three rotational rows are used, and
-each update removes orient_gain of the rotation error. With tip_z set, the tip height is held there the same way (air hockey): the samples
+each update removes orient_gain of the rotation error. With orient_axis set ({arm: unit
+vector}) only the tool z axis is turned towards that direction (a paddle face), by
+orient_gain per update; the roll about it stays free. With tip_z set, the tip height is held there the same way (air hockey): the samples
 only explore x and y, and each update removes tip_z_gain of the height error. With
-posture_gain > 0 the joints are also pulled towards HOME_Q in the Jacobian
+posture_gain > 0 the joints are also pulled towards the robot's home_q in the Jacobian
 null space, so the redundancy cannot drift into folded configurations. Rollouts,
 costs and the weighted update stay in actuator (joint-target) space. Rollouts
 run in parallel with mujoco.rollout.
@@ -29,7 +31,7 @@ import mujoco
 import mujoco.rollout
 import numpy as np
 
-from ..robot import ARMS, HOME_Q, DualFranka
+from ..robot import DualFranka
 from ..samplers import make_sampler
 from .lbps import optimize_lbps_temperature, weighted_control_sequence
 
@@ -46,9 +48,11 @@ class MPPIConfig:
     upright_gain: float = 0.0      # per-update fraction of tool tilt removed (0: orientation free)
     orient_target: dict | None = None  # {arm: tool rotation matrix} to hold, overrides upright_gain
     orient_gain: float = 0.5       # per-update fraction of the tool rotation error removed
+    orient_axis: dict | None = None  # {arm: direction} for the tool z axis, roll free (overrides upright_gain)
     tip_z: float | None = None     # fixed tip height, metres (None: free)
     tip_z_gain: float = 0.5        # per-update fraction of the tip height error removed
-    posture_gain: float = 0.0      # per-update fraction of the null-space distance to HOME_Q removed
+    posture_gain: float = 0.0      # per-update fraction of the null-space distance to home_q removed
+    ctrl_rate: np.ndarray | None = None  # per-actuator limit on the command change per control step
     lbps_delta: float = 0.95
     lambda_temperature: float = 1.0  # fallback when LBPS cannot adapt
     w_clearance: float = 1e3
@@ -62,13 +66,22 @@ class MPPIConfig:
 ArmCost = Callable[[np.ndarray, str, object], np.ndarray]
 
 
+def _perp_basis(axis: np.ndarray) -> np.ndarray:
+    """Two orthonormal rows normal to ``axis``."""
+    a = axis / np.linalg.norm(axis)
+    ref = np.array([1.0, 0.0, 0.0]) if abs(a[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = np.cross(a, ref)
+    e1 /= np.linalg.norm(e1)
+    return np.array([e1, np.cross(a, e1)])
+
+
 class MPPIController:
     """Optimizes the joint targets of ``arms``; other actuators follow a given plan."""
 
     def __init__(self, robot: DualFranka, arms, cfg: MPPIConfig, arm_cost: ArmCost):
         self.robot, self.arms, self.cfg, self.arm_cost = robot, tuple(arms), cfg, arm_cost
         m = robot.model
-        self.substeps = max(1, int(round(cfg.control_dt / m.opt.timestep)))
+        self.substeps = max(1, int(round(cfg.control_dt / robot.plan_model.opt.timestep)))
         self.sampler = make_sampler(cfg.sampler, cfg.rollouts, cfg.horizon, 3 * len(self.arms),
                                     dt=cfg.control_dt)
         self.rng = np.random.default_rng(cfg.seed)
@@ -85,13 +98,19 @@ class MPPIController:
         cfg, robot = self.cfg, self.robot
         xyz = cfg.noise_std * self.sampler(self.rng)
         cand = np.broadcast_to(nominal, (cfg.rollouts, *nominal.shape)).copy()
-        # Rotational rows held by the mapping: none, the two tilt rows, or all three.
-        nrot = 3 if cfg.orient_target is not None else (2 if cfg.upright_gain > 0 else 0)
+        # Rotational rows held by the mapping: none, two (a tool axis direction), or all three.
+        down = np.array([0.0, 0.0, -1.0])
+        axis, axis_gain = cfg.orient_axis, cfg.orient_gain
+        if axis is None and cfg.upright_gain > 0:
+            axis, axis_gain = {arm: down for arm in self.arms}, cfg.upright_gain
+        nrot = 3 if cfg.orient_target is not None else (2 if axis is not None else 0)
         rows = 3 + nrot
-        jac = {arm: np.empty((cfg.horizon, rows, 7)) for arm in self.arms}
+        ndof = {arm: len(robot.arm_act[arm]) for arm in self.arms}
+        jac = {arm: np.empty((cfg.horizon, rows, ndof[arm])) for arm in self.arms}
         turn = {arm: np.zeros((cfg.horizon, nrot)) for arm in self.arms}
         lift = {arm: np.zeros(cfg.horizon) for arm in self.arms}
-        down = np.array([0.0, 0.0, -1.0])
+        perp = {arm: _perp_basis(axis[arm]) for arm in self.arms} if nrot == 2 else {}
+        self.scratch.qpos[:] = robot.data.qpos  # anything not planned here (e.g. rails) as it is now
         for t in range(cfg.horizon):
             for arm in self.arms:
                 self.scratch.qpos[robot.joint_qadr[arm]] = nominal[t, robot.arm_act[arm]]
@@ -100,13 +119,14 @@ class MPPIController:
             for arm in self.arms:
                 if nrot:
                     jacp, jacr, rot = robot.jacobian_rot(arm, self.scratch)
-                    jac[arm][t] = np.vstack([jacp, jacr[:nrot]])
                     if nrot == 3:  # small-angle rotation vector of target * current^T
+                        jac[arm][t] = np.vstack([jacp, jacr])
                         err = cfg.orient_target[arm] @ rot.T
                         turn[arm][t] = cfg.orient_gain * 0.5 * np.array(
                             [err[2, 1] - err[1, 2], err[0, 2] - err[2, 0], err[1, 0] - err[0, 1]])
-                    else:
-                        turn[arm][t] = cfg.upright_gain * np.cross(rot[:, 2], down)[:2]
+                    else:  # the two rotations that tilt the tool z axis, about axes normal to the target
+                        jac[arm][t] = np.vstack([jacp, perp[arm] @ jacr])
+                        turn[arm][t] = axis_gain * perp[arm] @ np.cross(rot[:, 2], axis[arm])
                 else:
                     jac[arm][t] = robot.jacobian(arm, self.scratch)
                 if cfg.tip_z is not None:
@@ -114,7 +134,7 @@ class MPPIController:
         for k, arm in enumerate(self.arms):
             if cfg.ik_damping > 0:  # bounded joint offsets near singular poses
                 jt = jac[arm].transpose(0, 2, 1)
-                jinv = jt @ np.linalg.inv(jac[arm] @ jt + cfg.ik_damping ** 2 * np.eye(rows))  # (H, 7, rows)
+                jinv = jt @ np.linalg.inv(jac[arm] @ jt + cfg.ik_damping ** 2 * np.eye(rows))  # (H, ndof, rows)
             else:
                 jinv = np.linalg.pinv(jac[arm], rcond=cfg.ik_rcond)
             if cfg.tip_z is not None:
@@ -123,10 +143,16 @@ class MPPIController:
             if nrot:
                 cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,tc->tj', jinv[:, :, 3:], turn[arm])
             if cfg.posture_gain > 0:
-                null = np.eye(7) - jinv @ jac[arm]
-                pull = cfg.posture_gain * (HOME_Q - nominal[:, robot.arm_act[arm]])
+                null = np.eye(ndof[arm]) - jinv @ jac[arm]
+                pull = cfg.posture_gain * (robot.home_q - nominal[:, robot.arm_act[arm]])
                 cand[:, :, robot.arm_act[arm]] += np.einsum('tij,tj->ti', null, pull)
-        return np.clip(cand, robot.ctrl_low, robot.ctrl_high)
+        cand = np.clip(cand, robot.ctrl_low, robot.ctrl_high)
+        if cfg.ctrl_rate is not None:  # speed limits, from the command applied now along the horizon
+            prev = np.broadcast_to(robot.data.ctrl, cand[:, 0].shape)
+            for t in range(cfg.horizon):
+                cand[:, t] = prev + np.clip(cand[:, t] - prev, -cfg.ctrl_rate, cfg.ctrl_rate)
+                prev = cand[:, t]
+        return cand
 
     def _costs(self, sensors: np.ndarray, goal) -> np.ndarray:
         cfg, robot = self.cfg, self.robot

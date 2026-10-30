@@ -73,7 +73,55 @@ def build_model(base_distance: float = 1.5, scene_xml: Path = SCENE_XML, tool: s
     return spec.compile()
 
 
-class DualFranka:
+class DualArm:
+    """Shared accessors of a two-arm robot. Subclasses set model, data, plan_model,
+    home_q, joint_qadr, joint_dadr, arm_act and ee_site."""
+
+    def sensor_slice(self, name: str) -> slice:
+        """Columns of a named sensor in sensordata (and in rollout sensor output)."""
+        sensor = self.model.sensor(name)
+        return slice(int(sensor.adr[0]), int(sensor.adr[0] + sensor.dim[0]))
+
+    @property
+    def nu(self) -> int:
+        return self.model.nu
+
+    def q(self, arm, data=None):
+        return (self.data if data is None else data).qpos[self.joint_qadr[arm]].copy()
+
+    def dq(self, arm, data=None):
+        return (self.data if data is None else data).qvel[self.joint_dadr[arm]].copy()
+
+    def ee(self, arm, data=None):
+        return (self.data if data is None else data).site_xpos[self.ee_site[arm]].copy()
+
+    def jacobian(self, arm, data=None):
+        """Translational tip Jacobian (3 x ndof) over the arm's joints."""
+        d = self.data if data is None else data
+        jacp = np.zeros((3, self.model.nv))
+        mujoco.mj_jacSite(self.model, d, jacp, None, self.ee_site[arm])
+        return jacp[:, self.joint_dadr[arm]]
+
+    def jacobian_rot(self, arm, data=None):
+        """Tip translational and rotational Jacobians (3 x ndof each) and the tool rotation matrix."""
+        d = self.data if data is None else data
+        jacp, jacr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
+        mujoco.mj_jacSite(self.model, d, jacp, jacr, self.ee_site[arm])
+        dofs = self.joint_dadr[arm]
+        return jacp[:, dofs], jacr[:, dofs], self.tool_rot(arm, d)
+
+    def tool_rot(self, arm, data=None):
+        return (self.data if data is None else data).site_xmat[self.ee_site[arm]].reshape(3, 3).copy()
+
+    def state(self, data=None) -> np.ndarray:
+        d = self.data if data is None else data
+        spec = mujoco.mjtState.mjSTATE_FULLPHYSICS
+        out = np.empty(mujoco.mj_stateSize(self.model, spec))
+        mujoco.mj_getState(self.model, d, out, spec)
+        return out
+
+
+class DualFranka(DualArm):
     def __init__(self, base_distance: float = 1.5, scene_xml: Path = SCENE_XML, tool: str = 'stick',
                  bases: dict | None = None):
         self.model = build_model(base_distance, scene_xml, tool, bases)
@@ -81,6 +129,7 @@ class DualFranka:
         # Model that MPPI rolls out; a task may set a cheaper copy with the same state layout.
         self.plan_model = self.model
         self.tool = tool
+        self.home_q = HOME_Q  # posture the MPPI null space is pulled towards
         self.proxy_bodies = PROXY_BODIES if tool == 'stick' else GRIPPER_PROXY_BODIES
         m = self.model
         self.joint_qadr, self.joint_dadr, self.arm_act, self.ee_site = {}, {}, {}, {}
@@ -113,48 +162,5 @@ class DualFranka:
             self.data.ctrl[act] = GRIP_OPEN
         mujoco.mj_forward(self.model, self.data)
 
-    def sensor_slice(self, name: str) -> slice:
-        """Columns of a named sensor in sensordata (and in rollout sensor output)."""
-        sensor = self.model.sensor(name)
-        return slice(int(sensor.adr[0]), int(sensor.adr[0] + sensor.dim[0]))
-
-    @property
-    def nu(self) -> int:
-        return self.model.nu
-
-    def q(self, arm, data=None):
-        return (self.data if data is None else data).qpos[self.joint_qadr[arm]].copy()
-
-    def dq(self, arm, data=None):
-        return (self.data if data is None else data).qvel[self.joint_dadr[arm]].copy()
-
-    def ee(self, arm, data=None):
-        return (self.data if data is None else data).site_xpos[self.ee_site[arm]].copy()
-
-    def jacobian(self, arm, data=None):
-        """Translational tip Jacobian (3 x 7) over the arm's joints."""
-        d = self.data if data is None else data
-        jacp = np.zeros((3, self.model.nv))
-        mujoco.mj_jacSite(self.model, d, jacp, None, self.ee_site[arm])
-        return jacp[:, self.joint_dadr[arm]]
-
-    def jacobian_rot(self, arm, data=None):
-        """Tip translational and rotational Jacobians (3 x 7 each) and the tool rotation matrix."""
-        d = self.data if data is None else data
-        jacp, jacr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
-        mujoco.mj_jacSite(self.model, d, jacp, jacr, self.ee_site[arm])
-        dofs = self.joint_dadr[arm]
-        return jacp[:, dofs], jacr[:, dofs], self.tool_rot(arm, d)
-
-    def tool_rot(self, arm, data=None):
-        return (self.data if data is None else data).site_xmat[self.ee_site[arm]].reshape(3, 3).copy()
-
     def set_target_marker(self, arm, xyz):
         self.data.mocap_pos[self.target_mocap[arm]] = xyz
-
-    def state(self, data=None) -> np.ndarray:
-        d = self.data if data is None else data
-        spec = mujoco.mjtState.mjSTATE_FULLPHYSICS
-        out = np.empty(mujoco.mj_stateSize(self.model, spec))
-        mujoco.mj_getState(self.model, d, out, spec)
-        return out
