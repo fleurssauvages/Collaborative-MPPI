@@ -1,0 +1,75 @@
+<mujoco model="dual_panda_object_handling">
+  <!-- Object handling. The two Panda arms (with grippers) are attached in Python
+       (collab_mppi/robot.py) side by side, both facing +x: robot 1 (right arm) at
+       y = -0.45, robot 2 (left arm) at y = +0.45. Three boxes start on the table on
+       robot 1's right; robot 1 hands them to robot 2 in the air between the robots,
+       and robot 2 puts them on the goal table on its left. -->
+  <!-- Elliptic friction cones with a high impratio, against soft-contact slip in the grasps. -->
+  <option timestep="0.005" integrator="implicit" cone="elliptic" impratio="10"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <global azimuth="180" elevation="-30" offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.38 0.52" rgb2="0.03 0.04 0.06"
+             width="512" height="3072"/>
+    <texture type="2d" name="ground" builtin="checker" mark="edge"
+             rgb1="0.18 0.20 0.22" rgb2="0.10 0.11 0.12" markrgb="0.7 0.7 0.7"
+             width="300" height="300"/>
+    <material name="ground" texture="ground" texuniform="true" texrepeat="5 5"/>
+    <material name="table" rgba="0.55 0.42 0.30 1"/>
+  </asset>
+
+  <default>
+    <default class="box">
+      <!-- High torsional friction: a box held off its centre must not turn between the finger pads. -->
+      <geom type="box" size="0.02 0.12 0.02" mass="0.03" condim="4" friction="1.5 0.06 0.001"/>
+    </default>
+    <default class="slot">
+      <geom type="box" size="0.024 0.124 0.0005" contype="0" conaffinity="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.6 0 2.0" dir="0 0 -1" directional="true"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="ground"/>
+
+    <!-- Tables with tops at z = 0.20, x in [0.32, 0.72]: start (robot 1's right), goal (robot 2's left). -->
+    <geom name="start_table" type="box" pos="0.52 -0.70 0.1" size="0.2 0.15 0.1" material="table"/>
+    <geom name="goal_table" type="box" pos="0.52 0.70 0.1" size="0.2 0.15 0.1" material="table"/>
+    <!-- Goal slots, visual only; collab_mppi/object_handling/task.py reads their positions. -->
+    <geom name="slot0" class="slot" pos="0.40 0.70 0.2005" rgba="0.85 0.25 0.2 0.5"/>
+    <geom name="slot1" class="slot" pos="0.52 0.70 0.2005" rgba="0.25 0.7 0.3 0.5"/>
+    <geom name="slot2" class="slot" pos="0.64 0.70 0.2005" rgba="0.25 0.4 0.85 0.5"/>
+
+    <!-- Boxes, long along y so both grippers fit on one box at the handover. -->
+    <body name="box0" pos="0.40 -0.70 0.22">
+      <freejoint name="box0"/>
+      <geom name="box0" class="box" rgba="0.85 0.25 0.2 1"/>
+    </body>
+    <body name="box1" pos="0.52 -0.70 0.22">
+      <freejoint name="box1"/>
+      <geom name="box1" class="box" rgba="0.25 0.7 0.3 1"/>
+    </body>
+    <body name="box2" pos="0.64 -0.70 0.22">
+      <freejoint name="box2"/>
+      <geom name="box2" class="box" rgba="0.25 0.4 0.85 1"/>
+    </body>
+
+    <!-- Target markers expected by collab_mppi/robot.py; hidden in this task. -->
+    <body name="left_target" mocap="true" pos="0.5 0.3 0.4">
+      <geom type="sphere" size="0.015" rgba="0 0 0 0" contype="0" conaffinity="0"/>
+    </body>
+    <body name="right_target" mocap="true" pos="0.5 -0.3 0.4">
+      <geom type="sphere" size="0.015" rgba="0 0 0 0" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+
+  <sensor>
+    <framepos name="box0_pos" objtype="xbody" objname="box0"/>
+    <framepos name="box1_pos" objtype="xbody" objname="box1"/>
+    <framepos name="box2_pos" objtype="xbody" objname="box2"/>
+  </sensor>
+</mujoco>

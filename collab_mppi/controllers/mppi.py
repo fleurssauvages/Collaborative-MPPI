@@ -6,7 +6,9 @@ Jacobian pseudo-inverse along the nominal plan, as in Franka_MPPI. With
 upright_gain > 0 the mapping also holds the tool pointing straight down: the
 Jacobian gains the two tilt rows, whose target turns the tool z axis back to
 vertical by that fraction per update, and the samples cannot tilt it. With
-tip_z set, the tip height is held there the same way (air hockey): the samples
+orient_target set ({arm: 3 x 3 rotation}) the whole tool orientation is held
+the same way, yaw included (grasping): all three rotational rows are used, and
+each update removes orient_gain of the rotation error. With tip_z set, the tip height is held there the same way (air hockey): the samples
 only explore x and y, and each update removes tip_z_gain of the height error. With
 posture_gain > 0 the joints are also pulled towards HOME_Q in the Jacobian
 null space, so the redundancy cannot drift into folded configurations. Rollouts,
@@ -42,6 +44,8 @@ class MPPIConfig:
     ik_rcond: float = 1e-4
     ik_damping: float = 0.0        # damped least squares instead of the pseudo-inverse when > 0
     upright_gain: float = 0.0      # per-update fraction of tool tilt removed (0: orientation free)
+    orient_target: dict | None = None  # {arm: tool rotation matrix} to hold, overrides upright_gain
+    orient_gain: float = 0.5       # per-update fraction of the tool rotation error removed
     tip_z: float | None = None     # fixed tip height, metres (None: free)
     tip_z_gain: float = 0.5        # per-update fraction of the tip height error removed
     posture_gain: float = 0.0      # per-update fraction of the null-space distance to HOME_Q removed
@@ -81,10 +85,11 @@ class MPPIController:
         cfg, robot = self.cfg, self.robot
         xyz = cfg.noise_std * self.sampler(self.rng)
         cand = np.broadcast_to(nominal, (cfg.rollouts, *nominal.shape)).copy()
-        upright = cfg.upright_gain > 0
-        rows = 5 if upright else 3
+        # Rotational rows held by the mapping: none, the two tilt rows, or all three.
+        nrot = 3 if cfg.orient_target is not None else (2 if cfg.upright_gain > 0 else 0)
+        rows = 3 + nrot
         jac = {arm: np.empty((cfg.horizon, rows, 7)) for arm in self.arms}
-        tilt = {arm: np.zeros((cfg.horizon, 2)) for arm in self.arms}
+        turn = {arm: np.zeros((cfg.horizon, nrot)) for arm in self.arms}
         lift = {arm: np.zeros(cfg.horizon) for arm in self.arms}
         down = np.array([0.0, 0.0, -1.0])
         for t in range(cfg.horizon):
@@ -93,13 +98,19 @@ class MPPIController:
             mujoco.mj_kinematics(robot.model, self.scratch)
             mujoco.mj_comPos(robot.model, self.scratch)
             for arm in self.arms:
-                if upright:
-                    jac[arm][t], z = robot.jacobian_upright(arm, self.scratch)
-                    tilt[arm][t] = cfg.upright_gain * np.cross(z, down)[:2]
-                if cfg.tip_z is not None:
-                    lift[arm][t] = cfg.tip_z_gain * (cfg.tip_z - robot.ee(arm, self.scratch)[2])
+                if nrot:
+                    jacp, jacr, rot = robot.jacobian_rot(arm, self.scratch)
+                    jac[arm][t] = np.vstack([jacp, jacr[:nrot]])
+                    if nrot == 3:  # small-angle rotation vector of target * current^T
+                        err = cfg.orient_target[arm] @ rot.T
+                        turn[arm][t] = cfg.orient_gain * 0.5 * np.array(
+                            [err[2, 1] - err[1, 2], err[0, 2] - err[2, 0], err[1, 0] - err[0, 1]])
+                    else:
+                        turn[arm][t] = cfg.upright_gain * np.cross(rot[:, 2], down)[:2]
                 else:
                     jac[arm][t] = robot.jacobian(arm, self.scratch)
+                if cfg.tip_z is not None:
+                    lift[arm][t] = cfg.tip_z_gain * (cfg.tip_z - robot.ee(arm, self.scratch)[2])
         for k, arm in enumerate(self.arms):
             if cfg.ik_damping > 0:  # bounded joint offsets near singular poses
                 jt = jac[arm].transpose(0, 2, 1)
@@ -109,8 +120,8 @@ class MPPIController:
             if cfg.tip_z is not None:
                 xyz[:, :, 3 * k + 2] = lift[arm]
             cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,ntc->ntj', jinv[:, :, :3], xyz[:, :, 3 * k:3 * k + 3])
-            if upright:
-                cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,tc->tj', jinv[:, :, 3:], tilt[arm])
+            if nrot:
+                cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,tc->tj', jinv[:, :, 3:], turn[arm])
             if cfg.posture_gain > 0:
                 null = np.eye(7) - jinv @ jac[arm]
                 pull = cfg.posture_gain * (HOME_Q - nominal[:, robot.arm_act[arm]])

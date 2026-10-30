@@ -99,7 +99,8 @@ def run(args) -> dict:
                                ('passes', tracker.passes), ('drops', tracker.drops), ('stalls', tracker.stalls),
                                ('clearance', clearance), ('compute_ms', compute)):
                 log[key].append(value)
-            if not display.update():
+            # The side view shows the left arm on the left of the screen.
+            if not display.update((f'left: {roles["left"]}', f'right: {roles["right"]}')):
                 break
             if args.print_every and step % args.print_every == 0:
                 print(f't={t:6.2f}s puck x={b[0]:+.2f} y={b[1]:+.2f} vx={v[0]:+.2f} '
