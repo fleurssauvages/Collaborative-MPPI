@@ -25,7 +25,7 @@
   <default>
     <default class="box">
       <!-- High torsional friction: a box held off its centre must not turn between the finger pads. -->
-      <geom type="box" size="0.02 0.12 0.02" mass="0.03" condim="4" friction="1.5 0.06 0.001"/>
+      <geom type="box" size="0.02 0.12 0.02" mass="0.005" condim="4" friction="1.5 0.06 0.001"/>
     </default>
     <default class="slot">
       <geom type="box" size="0.024 0.124 0.0005" contype="0" conaffinity="0"/>

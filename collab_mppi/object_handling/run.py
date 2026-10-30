@@ -15,7 +15,7 @@ import numpy as np
 from ..controllers import CollaborativeMPPI
 from ..robot import ARMS, ASSETS, DualFranka
 from ..sim import Display, add_mppi_args, add_output_args, mppi_config
-from .task import BASES, GIVER, GRASP_ROT, HOME_Q_GRASP, N_BOXES, TABLE_TOP, TAKER, HandlingConfig, HandlingTask
+from .task import BASES, GIVER, GRASP_ROT, HOME_Q_GRASP, N_BOXES, TABLE_TOP, TAKER, HandlingConfig, HandlingTask, plan_model
 
 SCENE = ASSETS / 'object_handling_scene.xml'
 # Front view: from beyond the tables, looking back at both robots.
@@ -39,6 +39,7 @@ def make_parser() -> argparse.ArgumentParser:
 
 def run(args) -> dict:
     robot = DualFranka(scene_xml=SCENE, tool='gripper', bases=BASES)
+    robot.plan_model = plan_model(robot.model)
     robot.reset(HOME_Q_GRASP)
     m, d = robot.model, robot.data
     substeps = max(1, int(round(args.control_dt / m.opt.timestep)))
@@ -82,7 +83,8 @@ def run(args) -> dict:
                                ('boxes', np.array([task.box_pos(k) for k in range(N_BOXES)])),
                                ('compute_ms', compute)):
                 log[key].append(value)
-            if not display.update():
+            # The front view shows robot 1 (the right arm) on the left of the screen.
+            if not display.update((f'robot 1: {task.arm[GIVER].phase}', f'robot 2: {task.arm[TAKER].phase}')):
                 break
             if args.print_every and step % args.print_every == 0:
                 status = ' '.join(f'{name}={task.arm[arm].phase} ({1e3 * np.linalg.norm(robot.ee(arm) - task.target(arm)[0]):.0f}mm)'

@@ -71,7 +71,9 @@ class Display:
             self.camera = mujoco.MjvCamera()
             set_camera(self.camera, view)
             Path(args.mp4).parent.mkdir(parents=True, exist_ok=True)
-            self.writer = imageio.get_writer(args.mp4, fps=round(1 / args.control_dt), codec='libx264',
+            # One frame per control step, at the simulated time it covers, so the video plays in real time.
+            frame_dt = max(1, round(args.control_dt / model.opt.timestep)) * model.opt.timestep
+            self.writer = imageio.get_writer(args.mp4, fps=1 / frame_dt, codec='libx264',
                                              quality=8, macro_block_size=1)
 
     def start_step(self):

@@ -26,6 +26,7 @@ not held) is a drop: it goes back to its start position and both arms restart it
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 
 import mujoco
@@ -41,6 +42,18 @@ N_BOXES = 3
 GRASP_ROT = np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
 HOME_Q_GRASP = np.array([0.0, -0.3, 0.0, -2.2, 0.0, 1.9, -0.785])  # HOME_Q turned to GRASP_ROT
 BASES = {'left': ((0.0, 0.45, 0.0), 0.0), 'right': ((0.0, -0.45, 0.0), 0.0)}
+
+
+def plan_model(model: mujoco.MjModel) -> mujoco.MjModel:
+    """Copy of the model for the MPPI rollouts, with the boxes floating and colliding
+    with nothing: the cost only reads the arms, the boxes are light, and the 18
+    contacts per finger on a held box made every rollout about 3x slower."""
+    plan = copy.deepcopy(model)
+    for k in range(N_BOXES):
+        plan.body_gravcomp[plan.body(f'box{k}').id] = 1.0
+        plan.geom_contype[plan.geom(f'box{k}').id] = 0
+        plan.geom_conaffinity[plan.geom(f'box{k}').id] = 0
+    return plan
 
 
 @dataclass

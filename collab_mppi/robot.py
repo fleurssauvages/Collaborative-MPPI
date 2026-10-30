@@ -29,9 +29,10 @@ PROXY_BODIES = ('link3', 'link4', 'link5', 'link6', 'link7', 'stick')
 GRIPPER_PROXY_BODIES = ('link3', 'link4', 'link5', 'link6', 'link7', 'hand')
 TCP_OFFSET = 0.103  # hand origin to the centre between the fingertip pads, metres
 GRIP_OPEN, GRIP_CLOSED = 255.0, 0.0  # gripper commands (0.08 m and 0 m between the fingers)
-# The Menagerie servo (100 N/m) squeezes a 4 cm object with only 2 N; this holds it with 100 N
-# (the actuator force limit), so a held object does not creep out while the arm moves.
-GRIP_STIFFNESS, GRIP_DAMPING = 5000.0, 100.0
+# The Menagerie servo (100 N/m) squeezes a 4 cm object with only 2 N; this holds it with 15 N,
+# so a held object does not creep out while the arm moves. MuJoCo contacts soften with the
+# object's mass: much more grip drives the fingers through a light (5 g) object.
+GRIP_STIFFNESS, GRIP_DAMPING = 750.0, 40.0
 
 
 def facing_bases(base_distance: float = 1.5) -> dict:
@@ -77,6 +78,8 @@ class DualFranka:
                  bases: dict | None = None):
         self.model = build_model(base_distance, scene_xml, tool, bases)
         self.data = mujoco.MjData(self.model)
+        # Model that MPPI rolls out; a task may set a cheaper copy with the same state layout.
+        self.plan_model = self.model
         self.tool = tool
         self.proxy_bodies = PROXY_BODIES if tool == 'stick' else GRIPPER_PROXY_BODIES
         m = self.model

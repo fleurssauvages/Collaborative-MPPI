@@ -74,7 +74,7 @@ class MPPIController:
         self.rng = np.random.default_rng(cfg.seed)
         self.nominal = np.tile(robot.data.ctrl, (cfg.horizon, 1))
         self.scratch = mujoco.MjData(m)
-        self.thread_data = [mujoco.MjData(m) for _ in range(max(1, cfg.threads))]
+        self.thread_data = [mujoco.MjData(robot.plan_model) for _ in range(max(1, cfg.threads))]
         self.pool = mujoco.rollout.Rollout(nthread=max(1, cfg.threads))
         self.info: dict = {}
 
@@ -155,7 +155,7 @@ class MPPIController:
             nominal[:, keep] = others[:, keep]
         cand = self._proposals(nominal)
         controls = np.repeat(cand, self.substeps, axis=1)
-        _, sensors = self.pool.rollout(robot.model, self.thread_data, robot.state()[None], controls)
+        _, sensors = self.pool.rollout(robot.plan_model, self.thread_data, robot.state()[None], controls)
         sensors = sensors[:, self.substeps - 1::self.substeps]
         costs = self._costs(sensors, goal)
         lbps = optimize_lbps_temperature(costs, delta=cfg.lbps_delta,
