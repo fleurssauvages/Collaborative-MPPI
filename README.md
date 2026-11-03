@@ -54,8 +54,6 @@ The two arms (facing each other, or side by side for object handling) are contro
 
 <h3 align="center">Object Handling</h3>
 
-<p align="center">Robot 1 picks three boxes from its table, hands each one over in the air to robot 2, which puts it on its slot on the other table.</p>
-
 <table align="center" width="100%">
   <tr>
     <th width="50%">Centralized Spike-MPPI (32 rollouts)</th>
@@ -71,6 +69,29 @@ The two arms (facing each other, or side by side for object handling) are contro
       <img src="assets/spike_object_handling_decentralized.gif"
            width="100%"
            alt="Decentralized Spike-MPPI object handling">
+    </td>
+  </tr>
+</table>
+
+<br>
+
+<h3 align="center">Tray Balancing</h3>
+
+<table align="center" width="100%">
+  <tr>
+    <th width="50%">Centralized Spike-MPPI (32 rollouts)</th>
+    <th width="50%">Decentralized Spike-MPPI (32 rollouts per arm)</th>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="assets/spike_tray_balancing_centralized.gif"
+           width="100%"
+           alt="Centralized Spike-MPPI tray balancing">
+    </td>
+    <td align="center">
+      <img src="assets/spike_tray_balancing_decentralized.gif"
+           width="100%"
+           alt="Decentralized Spike-MPPI tray balancing">
     </td>
   </tr>
 </table>
@@ -92,6 +113,7 @@ python -m pip install -r requirements.txt
 python -m collab_mppi.reaching.run --sampler spike --layout centralized --viewer
 python -m collab_mppi.air_hockey.run --sampler spike --layout decentralized --viewer
 python -m collab_mppi.object_handling.run --sampler spike --layout centralized --viewer
+python -m collab_mppi.tray_balancing.run --sampler spike --layout centralized --viewer
 ```
 
 Use `--sampler standard`, `pink` or `poisson` for comparison, and `--help` for all options.

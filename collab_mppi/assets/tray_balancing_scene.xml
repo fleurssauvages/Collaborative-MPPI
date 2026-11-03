@@ -1,0 +1,77 @@
+<mujoco model="dual_panda_tray_balancing">
+  <!-- Tray balancing. The two Panda arms (with grippers) are attached in Python
+       (collab_mppi/robot.py) facing each other at x = -0.75 (left) and x = +0.75 (right).
+       They hold a large tray by handles at two diagonally opposite corners and keep a ball
+       near its centre. Each grasp is a weld between the arm's hand and the tray, set up by
+       collab_mppi/tray_balancing/task.py from the initial posture. -->
+  <!-- Ball contact and solver settings from Franka_MPPI's franka_ball_balancing_scene.xml. -->
+  <option timestep="0.005" integrator="implicit" solver="Newton" iterations="100" ls_iterations="30"
+          tolerance="1e-10" noslip_iterations="5" noslip_tolerance="1e-9" cone="elliptic"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <global azimuth="90" elevation="-45" offwidth="1280" offheight="720"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.38 0.52" rgb2="0.03 0.04 0.06"
+             width="512" height="3072"/>
+    <texture type="2d" name="ground" builtin="checker" mark="edge"
+             rgb1="0.18 0.20 0.22" rgb2="0.10 0.11 0.12" markrgb="0.7 0.7 0.7"
+             width="300" height="300"/>
+    <material name="ground" texture="ground" texuniform="true" texrepeat="5 5"/>
+    <material name="tray" rgba="0.55 0.42 0.30 1"/>
+    <material name="handle" rgba="0.2 0.2 0.22 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 -0.6 2.0" dir="0 0.3 -1" directional="true"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="ground"/>
+
+    <!-- Tray, 0.50 x 0.36 m, top at z = 0.356. contype/conaffinity 2: the tray and the ball
+         touch each other only, so the grasped tray never fights the arms or the floor.
+         Handles stick out of the (-x, -y) corner (left arm) and the (+x, +y) corner (right
+         arm) along the diagonal. -->
+    <body name="tray" pos="0 0 0.35">
+      <freejoint name="tray"/>
+      <geom name="tray" type="box" size="0.25 0.18 0.006" mass="0.6" material="tray"
+            contype="2" conaffinity="2" friction="0.88 0.012 0.001" condim="6" priority="1"
+            solref="0.004 1.0"/>
+      <!-- Centre mark, visual only. -->
+      <geom type="cylinder" pos="0 0 0.0061" size="0.03 0.0005" rgba="0.95 0.95 0.95 0.6"
+            contype="0" conaffinity="0"/>
+      <geom name="handle_left" type="capsule" fromto="-0.25 -0.18 0 -0.307 -0.221 0" size="0.012"
+            mass="0.02" material="handle" contype="0" conaffinity="0"/>
+      <geom name="handle_right" type="capsule" fromto="0.25 0.18 0 0.307 0.221 0" size="0.012"
+            mass="0.02" material="handle" contype="0" conaffinity="0"/>
+    </body>
+
+    <body name="ball" pos="0 0 0.374">
+      <freejoint name="ball"/>
+      <geom name="ball" type="sphere" size="0.018" mass="0.007" rgba="0.96 0.74 0.19 1"
+            contype="2" conaffinity="2" friction="0.70 0.012 0.0008" condim="6" solref="0.004 1.0"/>
+    </body>
+
+    <!-- Target markers expected by collab_mppi/robot.py; hidden in this task. -->
+    <body name="left_target" mocap="true" pos="-0.3 0 0.5">
+      <geom type="sphere" size="0.015" rgba="0 0 0 0" contype="0" conaffinity="0"/>
+    </body>
+    <body name="right_target" mocap="true" pos="0.3 0 0.5">
+      <geom type="sphere" size="0.015" rgba="0 0 0 0" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+
+  <!-- Grasps: relpose and anchor are set in Python once the arms hold the handles. -->
+  <equality>
+    <weld name="left_grasp" body1="left_hand" body2="tray"/>
+    <weld name="right_grasp" body1="right_hand" body2="tray"/>
+  </equality>
+
+  <sensor>
+    <!-- Ball position and velocity in the tray frame. -->
+    <framepos name="ball_pos" objtype="xbody" objname="ball" reftype="xbody" refname="tray"/>
+    <framelinvel name="ball_vel" objtype="xbody" objname="ball" reftype="xbody" refname="tray"/>
+    <framepos name="tray_pos" objtype="xbody" objname="tray"/>
+    <framezaxis name="tray_normal" objtype="xbody" objname="tray"/>
+  </sensor>
+</mujoco>

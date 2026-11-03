@@ -10,7 +10,10 @@ orient_target set ({arm: 3 x 3 rotation}) the whole tool orientation is held
 the same way, yaw included (grasping): all three rotational rows are used, and
 each update removes orient_gain of the rotation error. With orient_axis set ({arm: unit
 vector}) only the tool z axis is turned towards that direction (a paddle face), by
-orient_gain per update; the roll about it stays free. With tip_z set, the tip height is held there the same way (air hockey): the samples
+orient_gain per update; the roll about it stays free. With rot_noise_std > 0 the
+proposals explore tool rotation as well (three more channels per arm, a world-frame
+rotation vector in radians, mapped through the rotational Jacobian rows; tray
+balancing), and no orientation is held. With tip_z set, the tip height is held there the same way (air hockey): the samples
 only explore x and y, and each update removes tip_z_gain of the height error. With
 posture_gain > 0 the joints are also pulled towards the robot's home_q in the Jacobian
 null space, so the redundancy cannot drift into folded configurations. Rollouts,
@@ -19,7 +22,10 @@ run in parallel with mujoco.rollout.
 
 The task objective is a per-arm cost ``arm_cost(sensors, arm, goal) -> (rollouts,)``
 on the rollout sensors (rollouts x horizon x nsensordata); the controller adds
-the floor and arm-arm clearance penalties.
+the floor and arm-arm clearance penalties, and with w_lag > 0 a penalty on the joint
+targets running ahead of the joints. Arms that hold one object (tray balancing)
+can disagree without moving it: their targets then drift apart, loading the
+joints, and the actuator force saturates long before the lag stops growing.
 """
 from __future__ import annotations
 
@@ -49,6 +55,7 @@ class MPPIConfig:
     orient_target: dict | None = None  # {arm: tool rotation matrix} to hold, overrides upright_gain
     orient_gain: float = 0.5       # per-update fraction of the tool rotation error removed
     orient_axis: dict | None = None  # {arm: direction} for the tool z axis, roll free (overrides upright_gain)
+    rot_noise_std: float = 0.0     # rotational exploration, rad (0: translation only)
     tip_z: float | None = None     # fixed tip height, metres (None: free)
     tip_z_gain: float = 0.5        # per-update fraction of the tip height error removed
     posture_gain: float = 0.0      # per-update fraction of the null-space distance to home_q removed
@@ -58,6 +65,7 @@ class MPPIConfig:
     w_clearance: float = 1e3
     clearance: float = 0.15        # minimum distance between the arms' proxy points, metres
     w_floor: float = 1e3
+    w_lag: float = 0.0             # squared joint target - joint position, rad^-2 (0: off)
     floor_z: float = 0.05          # lowest fingertip height (floor or table top), metres
     threads: int = 4
     seed: int = 0
@@ -82,7 +90,11 @@ class MPPIController:
         self.robot, self.arms, self.cfg, self.arm_cost = robot, tuple(arms), cfg, arm_cost
         m = robot.model
         self.substeps = max(1, int(round(cfg.control_dt / robot.plan_model.opt.timestep)))
-        self.sampler = make_sampler(cfg.sampler, cfg.rollouts, cfg.horizon, 3 * len(self.arms),
+        if cfg.rot_noise_std > 0 and (cfg.orient_target is not None or cfg.orient_axis is not None
+                                      or cfg.upright_gain > 0):
+            raise ValueError('rot_noise_std explores the orientation: it excludes holding one')
+        self.channels = 6 if cfg.rot_noise_std > 0 else 3  # explored channels per arm
+        self.sampler = make_sampler(cfg.sampler, cfg.rollouts, cfg.horizon, self.channels * len(self.arms),
                                     dt=cfg.control_dt)
         self.rng = np.random.default_rng(cfg.seed)
         self.nominal = np.tile(robot.data.ctrl, (cfg.horizon, 1))
@@ -96,14 +108,16 @@ class MPPIController:
 
     def _proposals(self, nominal: np.ndarray) -> np.ndarray:
         cfg, robot = self.cfg, self.robot
-        xyz = cfg.noise_std * self.sampler(self.rng)
+        c = self.channels
+        scale = np.tile([cfg.noise_std] * 3 + [cfg.rot_noise_std] * (c - 3), len(self.arms))
+        xyz = scale * self.sampler(self.rng)
         cand = np.broadcast_to(nominal, (cfg.rollouts, *nominal.shape)).copy()
         # Rotational rows held by the mapping: none, two (a tool axis direction), or all three.
         down = np.array([0.0, 0.0, -1.0])
         axis, axis_gain = cfg.orient_axis, cfg.orient_gain
         if axis is None and cfg.upright_gain > 0:
             axis, axis_gain = {arm: down for arm in self.arms}, cfg.upright_gain
-        nrot = 3 if cfg.orient_target is not None else (2 if axis is not None else 0)
+        nrot = 3 if cfg.orient_target is not None or c == 6 else (2 if axis is not None else 0)
         rows = 3 + nrot
         ndof = {arm: len(robot.arm_act[arm]) for arm in self.arms}
         jac = {arm: np.empty((cfg.horizon, rows, ndof[arm])) for arm in self.arms}
@@ -119,7 +133,9 @@ class MPPIController:
             for arm in self.arms:
                 if nrot:
                     jacp, jacr, rot = robot.jacobian_rot(arm, self.scratch)
-                    if nrot == 3:  # small-angle rotation vector of target * current^T
+                    if c == 6:  # explored, nothing held
+                        jac[arm][t] = np.vstack([jacp, jacr])
+                    elif nrot == 3:  # small-angle rotation vector of target * current^T
                         jac[arm][t] = np.vstack([jacp, jacr])
                         err = cfg.orient_target[arm] @ rot.T
                         turn[arm][t] = cfg.orient_gain * 0.5 * np.array(
@@ -138,9 +154,12 @@ class MPPIController:
             else:
                 jinv = np.linalg.pinv(jac[arm], rcond=cfg.ik_rcond)
             if cfg.tip_z is not None:
-                xyz[:, :, 3 * k + 2] = lift[arm]
-            cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,ntc->ntj', jinv[:, :, :3], xyz[:, :, 3 * k:3 * k + 3])
-            if nrot:
+                xyz[:, :, c * k + 2] = lift[arm]
+            cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,ntc->ntj', jinv[:, :, :3], xyz[:, :, c * k:c * k + 3])
+            if c == 6:
+                cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,ntc->ntj', jinv[:, :, 3:],
+                                                            xyz[:, :, c * k + 3:c * k + 6])
+            elif nrot:
                 cand[:, :, robot.arm_act[arm]] += np.einsum('tjc,tc->tj', jinv[:, :, 3:], turn[arm])
             if cfg.posture_gain > 0:
                 null = np.eye(ndof[arm]) - jinv @ jac[arm]
@@ -154,13 +173,16 @@ class MPPIController:
                 prev = cand[:, t]
         return cand
 
-    def _costs(self, sensors: np.ndarray, goal) -> np.ndarray:
+    def _costs(self, sensors: np.ndarray, goal, cand: np.ndarray, qpos: np.ndarray) -> np.ndarray:
         cfg, robot = self.cfg, self.robot
         cost = np.zeros(len(sensors))
         for arm in self.arms:
             cost += self.arm_cost(sensors, arm, goal)
             low = np.maximum(cfg.floor_z - sensors[:, :, robot.sensor_ee[arm]][..., 2], 0.0)
             cost += cfg.w_floor * np.sum(low ** 2, axis=1)
+            if cfg.w_lag:
+                lag = cand[:, :, robot.arm_act[arm]] - qpos[:, :, robot.joint_qadr[arm]]
+                cost += cfg.w_lag * np.mean(np.sum(lag ** 2, axis=2), axis=1)
         # Arm-arm clearance between every pair of proxy points.
         a = sensors[:, :, robot.sensor_arm['left']].reshape(*sensors.shape[:2], -1, 1, 3)
         b = sensors[:, :, robot.sensor_arm['right']].reshape(*sensors.shape[:2], 1, -1, 3)
@@ -181,9 +203,11 @@ class MPPIController:
             nominal[:, keep] = others[:, keep]
         cand = self._proposals(nominal)
         controls = np.repeat(cand, self.substeps, axis=1)
-        _, sensors = self.pool.rollout(robot.plan_model, self.thread_data, robot.state()[None], controls)
+        states, sensors = self.pool.rollout(robot.plan_model, self.thread_data, robot.state()[None], controls)
         sensors = sensors[:, self.substeps - 1::self.substeps]
-        costs = self._costs(sensors, goal)
+        # Full physics state: time, then qpos.
+        qpos = states[:, self.substeps - 1::self.substeps, 1:1 + robot.plan_model.nq]
+        costs = self._costs(sensors, goal, cand, qpos)
         lbps = optimize_lbps_temperature(costs, delta=cfg.lbps_delta,
                                          fallback_temperature=cfg.lambda_temperature)
         plan = weighted_control_sequence(costs, cand, lbps.temperature)
